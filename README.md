@@ -1,5 +1,6 @@
 # Chicago Food Safety Dashboard
 
+[Live URL](https://chicago-food-frontend-production.up.railway.app)
 
 **Chicago inspection data → Python ETL → PostgreSQL → FastAPI → React/Recharts**
 
