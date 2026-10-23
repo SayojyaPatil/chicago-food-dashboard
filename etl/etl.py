@@ -10,6 +10,8 @@ Run:
 
 import os
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import psycopg2
 from psycopg2.extras import execute_batch
 from datetime import datetime
@@ -21,7 +23,7 @@ load_dotenv()
 
 SOCRATA_URL = "https://data.cityofchicago.org/resource/4ijn-s7e5.json"
 BATCH_SIZE  = 1000
-LIMIT       = 50000   # ~50k most recent records; raise to pull full dataset
+LIMIT       = int(os.getenv("ETL_LIMIT", "50000"))  # newest records; adjustable
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST",     "localhost"),
@@ -33,10 +35,22 @@ DB_CONFIG = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def fetch_records(limit: int) -> list[dict]:
+def make_session():
+    """Retry temporary server errors and throttling; always use request timeouts."""
+    session = requests.Session()
+    retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504],
+                  allowed_methods=["GET"], respect_retry_after_header=True)
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+def fetch_records(limit: int, session=None) -> list[dict]:
     """Fetch records from Socrata API with pagination."""
+    if limit < 0:
+        raise ValueError("limit must be nonnegative")
     records = []
     offset  = 0
+    session = session or make_session()
 
     print(f"Fetching up to {limit:,} records from Chicago Data Portal...")
 
@@ -45,12 +59,14 @@ def fetch_records(limit: int) -> list[dict]:
         params = {
             "$limit":  batch_size,
             "$offset": offset,
-            "$order":  "inspection_date DESC",
+            "$order":  "inspection_date DESC, inspection_id DESC",
         }
-        response = requests.get(SOCRATA_URL, params=params, timeout=30)
+        response = session.get(SOCRATA_URL, params=params, timeout=(10, 30))
         response.raise_for_status()
 
         batch = response.json()
+        if not isinstance(batch, list):
+            raise ValueError("Unexpected Socrata response: expected a list")
         if not batch:
             break
 
@@ -88,6 +104,14 @@ def clean_record(row: dict) -> dict:
         mapping = {"risk 1 (high)": "High", "risk 2 (medium)": "Medium", "risk 3 (low)": "Low"}
         return mapping.get(str(val).strip().lower(), str(val).strip())
 
+    def parse_float(value):
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     return {
         "inspection_id":    clean_str(row.get("inspection_id")),
         "dba_name":         clean_str(row.get("dba_name")),
@@ -103,8 +127,8 @@ def clean_record(row: dict) -> dict:
         "inspection_type":  clean_str(row.get("inspection_type")),
         "results":          clean_str(row.get("results")),
         "violations":       clean_str(row.get("violations")),
-        "latitude":         float(row["latitude"])  if row.get("latitude")  else None,
-        "longitude":        float(row["longitude"]) if row.get("longitude") else None,
+        "latitude":         parse_float(row.get("latitude")),
+        "longitude":        parse_float(row.get("longitude")),
     }
 
 
@@ -148,9 +172,21 @@ VALUES (
     %(inspection_type)s, %(results)s, %(violations)s, %(latitude)s, %(longitude)s
 )
 ON CONFLICT (inspection_id) DO UPDATE SET
+    dba_name        = EXCLUDED.dba_name,
+    aka_name        = EXCLUDED.aka_name,
+    license_num     = EXCLUDED.license_num,
+    facility_type   = EXCLUDED.facility_type,
+    risk            = EXCLUDED.risk,
+    address         = EXCLUDED.address,
+    city            = EXCLUDED.city,
+    state           = EXCLUDED.state,
+    zip             = EXCLUDED.zip,
+    inspection_date = EXCLUDED.inspection_date,
+    inspection_type = EXCLUDED.inspection_type,
     results         = EXCLUDED.results,
     violations      = EXCLUDED.violations,
-    inspection_date = EXCLUDED.inspection_date;
+    latitude        = EXCLUDED.latitude,
+    longitude       = EXCLUDED.longitude;
 """
 
 
@@ -178,9 +214,13 @@ def load_records(conn, records: list[dict]):
 
     print(f"Loading {len(cleaned):,} records ({skipped} skipped — missing ID)...")
 
-    with conn.cursor() as cur:
-        execute_batch(cur, INSERT_SQL, cleaned, page_size=500)
-    conn.commit()
+    try:
+        with conn.cursor() as cur:
+            execute_batch(cur, INSERT_SQL, cleaned, page_size=500)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     print(f"Done. {len(cleaned):,} records upserted.")
 

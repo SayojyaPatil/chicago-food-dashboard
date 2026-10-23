@@ -59,12 +59,12 @@ function PassFailTrend() {
   const { data, loading, error } = useFetch("/metrics/pass-fail-trend");
 
   return (
-    <ChartCard title="Monthly Pass / Fail Trend (24 Months)" loading={loading} error={error}>
+    <ChartCard title={data?.length ? `Monthly Inspection Outcomes (${data[0].month} to ${data[data.length - 1].month})` : "Monthly Inspection Outcomes"} loading={loading} error={error}>
       {data && (
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} />
+            <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} interval="preserveStartEnd" minTickGap={38} />
             <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={false} />
             <Tooltip
               contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
@@ -115,11 +115,11 @@ function TopFacilities() {
   return (
     <ChartCard title="Top 10 Facility Types — Pass Rate" loading={loading} error={error}>
       {data && (
-        <ResponsiveContainer width="100%" height={320}>
+        <ResponsiveContainer width="100%" height={340}>
           <BarChart
             data={data}
             layout="vertical"
-            margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
+            margin={{ top: 5, right: 25, left: 8, bottom: 5 }}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
             <XAxis type="number" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} unit="%" domain={[0, 100]} />
@@ -128,7 +128,8 @@ function TopFacilities() {
               dataKey="facility_type"
               tick={{ fill: "#94a3b8", fontSize: 11 }}
               tickLine={false}
-              width={115}
+              width={162}
+              tickFormatter={(label) => label.length > 24 ? `${label.slice(0, 21)}…` : label}
             />
             <Tooltip
               contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
@@ -146,11 +147,15 @@ function TopFacilities() {
 function ZipFailRates() {
   const { data, loading, error } = useFetch("/metrics/zip-fail-rates");
 
+  const chartData = (data || []).map(row => ({
+    ...row,
+    non_failed: Math.max(0, Number(row.total_inspections) - Number(row.failed)),
+  }));
   return (
-    <ChartCard title="Top 15 Zip Codes by Failure Count" loading={loading} error={error}>
+    <ChartCard title="Top 15 ZIP Codes — Failed vs. Other Inspections" loading={loading} error={error}>
       {data && (
         <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+          <BarChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
             <XAxis dataKey="zip" tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} />
             <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickLine={false} axisLine={false} />
@@ -158,8 +163,9 @@ function ZipFailRates() {
               contentStyle={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8 }}
               labelStyle={{ color: "#e2e8f0" }}
             />
-            <Bar dataKey="failed"            name="Failed"       fill={FAIL_COLOR} radius={[4, 4, 0, 0]} stackId="a" />
-            <Bar dataKey="total_inspections" name="Total"        fill="#1e293b"    radius={[4, 4, 0, 0]} stackId="b" />
+            <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
+            <Bar dataKey="failed"            name="Failed" fill={FAIL_COLOR} stackId="inspections" />
+            <Bar dataKey="non_failed" name="Other results" fill="#475569" stackId="inspections" />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -170,7 +176,7 @@ function ZipFailRates() {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const { data: kpi, loading: kpiLoading } = useFetch("/metrics/kpi-summary");
+  const { data: kpi, loading: kpiLoading, error: kpiError } = useFetch("/metrics/kpi-summary");
 
   return (
     <div className="app">
@@ -180,7 +186,7 @@ export default function App() {
             <h1 className="header-title">Chicago Food Safety Dashboard</h1>
             <p className="header-sub">Chicago Dept of Public Health — Inspection Analytics</p>
           </div>
-          <span className="header-badge">Live Data</span>
+          <span className="header-badge">Loaded Inspection Data</span>
         </div>
       </header>
 
@@ -189,12 +195,14 @@ export default function App() {
         <section className="kpi-row">
           {kpiLoading ? (
             <div className="state-msg">Loading KPIs...</div>
+          ) : kpiError ? (
+            <div className="state-msg error" role="alert">Unable to load inspection summary: {kpiError}</div>
           ) : kpi ? (
             <>
               <KPICard label="Total Inspections"    value={Number(kpi.total_inspections).toLocaleString()} />
-              <KPICard label="Overall Pass Rate"    value={`${kpi.overall_pass_rate}%`}   accent={PASS_COLOR} />
+              <KPICard label="Overall Pass Rate"    value={`${kpi.overall_pass_rate ?? "N/A"}${kpi.overall_pass_rate == null ? "" : "%"}`}   accent={PASS_COLOR} />
               <KPICard label="Total Failures"       value={Number(kpi.total_failed).toLocaleString()}       accent={FAIL_COLOR} />
-              <KPICard label="High-Risk Fail Rate"  value={`${kpi.high_risk_fail_rate}%`} accent="#f59e0b" />
+              <KPICard label="High-Risk Fail Rate"  value={`${kpi.high_risk_fail_rate ?? "N/A"}${kpi.high_risk_fail_rate == null ? "" : "%"}`} accent="#f59e0b" />
               <KPICard label="Zip Codes Covered"    value={kpi.zip_codes_covered} />
             </>
           ) : null}

@@ -13,6 +13,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv(
+    "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if origin.strip()]
 
 # Parse DATABASE_URL or fall back to individual vars
 def get_conn():
@@ -54,7 +57,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
@@ -63,6 +66,23 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/health/db")
+def database_health():
+    """Readiness check: raises 503 when PostgreSQL is unreachable."""
+    from fastapi import HTTPException
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        finally:
+            conn.close()
+    except psycopg2.Error:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return {"status": "ok", "database": "connected"}
 
 
 @app.get("/metrics/pass-fail-trend")
