@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "sirv dist --single --host 0.0.0.0"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "recharts": "^2.12.7"
+    "recharts": "^2.12.7",
+    "sirv-cli": "^3.0.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
