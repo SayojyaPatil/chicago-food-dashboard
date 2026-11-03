@@ -21,7 +21,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.sql import backend_name, metric_sql
+try:  # run from the repo root (uvicorn backend.main:app), as in Docker and tests
+    from backend.sql import backend_name, metric_sql
+except ModuleNotFoundError:  # run from inside backend/ (uvicorn main:app), as on Railway
+    from sql import backend_name, metric_sql
 
 load_dotenv()
 
