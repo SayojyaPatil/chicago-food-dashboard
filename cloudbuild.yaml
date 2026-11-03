@@ -1,0 +1,26 @@
+# Manual build and deploy from Cloud Shell:
+#   gcloud builds submit --config cloudbuild.yaml --substitutions=_TAG=$(git rev-parse --short HEAD)
+# GitHub Actions (.github/workflows/deploy.yml) does the same thing on every push to main.
+substitutions:
+  _REGION: us-central1
+  _REPO: food-safety
+  _TAG: manual
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}", "."]
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}"]
+  - id: deploy-service
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ["run", "deploy", "food-inspections", "--region", "${_REGION}",
+           "--image", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}"]
+  - id: update-etl-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ["run", "jobs", "update", "food-etl", "--region", "${_REGION}",
+           "--image", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}"]
+options:
+  logging: CLOUD_LOGGING_ONLY
