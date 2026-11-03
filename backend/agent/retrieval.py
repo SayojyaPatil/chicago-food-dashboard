@@ -87,7 +87,7 @@ class VertexEmbedder:
             self._client = genai.Client(
                 vertexai=True,
                 project=os.environ.get("GCP_PROJECT"),
-                location=os.getenv("VERTEX_LOCATION", "us-central1"),
+                location=os.getenv("VERTEX_LOCATION", "global"),
             )
         return self._client
 

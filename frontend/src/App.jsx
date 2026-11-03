@@ -61,6 +61,19 @@ function Star() {
 
 // ── Asking ───────────────────────────────────────────────────────────────────
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// The model sometimes writes **bold** or *italic*. Render those two cases;
+// everything else stays plain text (no HTML is ever injected).
+function Inline({ text }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/g);
+  return parts.map((part, i) => {
+    if (/^\*\*[^*]+\*\*$/.test(part)) return <strong key={i}>{part.slice(2, -2)}</strong>;
+    if (/^\*[^*\s][^*]*\*$/.test(part)) return <em key={i}>{part.slice(1, -1)}</em>;
+    return part;
+  });
+}
+
 function describeArgs(args = {}) {
   const parts = [];
   if (args.year) parts.push(String(args.year));
@@ -162,6 +175,7 @@ function Answer({ run }) {
   const { result } = run;
   const paragraphs = (result?.answer || "").split(/\n{2,}/).filter(Boolean);
   const totalMs = (run.steps || []).reduce((sum, s) => sum + (s.ms || 0), 0);
+  const cited = (result?.sources || []).filter(src => (result?.answer || "").includes(src.section));
   return (
     <section className="answer" aria-live="polite">
       <div className="answer-main">
@@ -170,7 +184,7 @@ function Answer({ run }) {
         {run.status === "error" && <p className="answer-error">{run.error}</p>}
         {result && (
           <>
-            <div className="answer-text">{paragraphs.map((p, i) => <p key={i}>{p}</p>)}</div>
+            <div className="answer-text">{paragraphs.map((p, i) => <p key={i}><Inline text={p} /></p>)}</div>
             {result.unverified_numbers?.length > 0 && (
               <p className="answer-note">
                 <strong>Check before reusing:</strong> {result.unverified_numbers.join(", ")} {result.unverified_numbers.length === 1 ? "does" : "do"} not
@@ -180,10 +194,10 @@ function Answer({ run }) {
             {result.steps?.some(s => s.removed_passages) && (
               <p className="answer-note">Some retrieved text was dropped because it read like instructions rather than code text.</p>
             )}
-            {result.sources?.length > 0 && (
+            {cited.length > 0 && (
               <div className="sources">
-                <h3>Food code sections used</h3>
-                <ul>{result.sources.map(s => <li key={s.section}><b>{s.section}</b> {s.title}</li>)}</ul>
+                <h3>Food code sections cited</h3>
+                <ul>{cited.map(s => <li key={s.section}><b>{s.section}</b> {s.title}</li>)}</ul>
               </div>
             )}
           </>
@@ -198,16 +212,18 @@ function Answer({ run }) {
                 <div className="step-name">{TOOL_LABELS[s.tool] || s.tool}</div>
                 {describeArgs(s.args) && <div className="step-args">{describeArgs(s.args)}</div>}
                 <div className="step-meta">
-                  {s.running ? "running" : s.ok === false ? `rejected: ${s.error}` : `${s.rows} ${s.tool === "search_food_code" ? "passages" : "rows"} in ${s.ms} ms`}
+                  {s.running ? "running" : s.ok === false ? `rejected: ${s.error}` : `${plural(s.rows, s.tool === "search_food_code" ? "passage" : "row")} in ${s.ms} ms`}
                 </div>
               </li>
             ))}
           </ol>
         ) : (
-          <p className="work-empty">{run.status === "working" ? "Choosing a data source…" : "Answered without looking anything up."}</p>
+          <p className="work-empty">{run.status === "working" ? "Choosing a data source…"
+            : run.status === "error" ? "Stopped before any lookup."
+            : "Answered without looking anything up."}</p>
         )}
         {result && run.steps?.length > 0 && (
-          <p className="work-total">{run.steps.length} lookups, {(result.latency_ms / 1000).toFixed(1)} s total, {totalMs} ms in queries</p>
+          <p className="work-total">{plural(run.steps.length, "lookup")}, {(result.latency_ms / 1000).toFixed(1)} s total, {totalMs} ms in queries</p>
         )}
       </aside>
     </section>
@@ -519,6 +535,14 @@ export default function App() {
             <a href="https://www.chicago.gov/content/dam/city/depts/dol/rulesandregs/CDPH-Food-Code-Rules-02-01-2019.pdf">Chicago Food Code Rules</a>.
           </p>
           <p>Answers are generated from that data by an AI model and can be wrong. Check the steps shown with each answer.</p>
+          <p className="legal">
+            This site provides applications using data that has been modified for use from its original source,
+            www.cityofchicago.org, the official website of the City of Chicago. The City of Chicago makes no claims as to
+            the content, accuracy, timeliness, or completeness of any of the data provided at this site. The data provided
+            at this site is subject to change at any time. It is understood that the data provided at this site is being
+            used at one's own risk. This project is not affiliated with or endorsed by the City of Chicago.
+            See the Data Portal <a href="https://www.chicago.gov/city/en/narr/foia/CityData.html">terms of use</a>.
+          </p>
         </div>
       </footer>
     </>

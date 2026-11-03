@@ -75,6 +75,10 @@ def citywide_summary(db, year):
             COUNTIF(results = 'Pass w/ Conditions') AS passed_with_conditions,
             COUNTIF(results = 'Fail') AS failed,
             ROUND(100 * SAFE_DIVIDE(COUNTIF(results = 'Pass'), COUNT(*)), 1) AS pass_rate_pct,
+            ROUND(100 * SAFE_DIVIDE(COUNTIF(results = 'Pass w/ Conditions'), COUNT(*)), 1)
+                AS pass_with_conditions_rate_pct,
+            ROUND(100 * SAFE_DIVIDE(COUNTIF(results IN ('Pass', 'Pass w/ Conditions')), COUNT(*)), 1)
+                AS passed_any_rate_pct,
             ROUND(100 * SAFE_DIVIDE(COUNTIF(results = 'Fail'), COUNT(*)), 1) AS fail_rate_pct,
             ROUND(100 * SAFE_DIVIDE(COUNTIF(risk = 'High' AND results = 'Fail'),
                                     COUNTIF(risk = 'High')), 1) AS high_risk_fail_rate_pct,
@@ -84,7 +88,8 @@ def citywide_summary(db, year):
           AND results IN {OUTCOMES}
     """, {"year": year})
     return {"rows": rows,
-            "note": "Rates use Pass, Pass w/ Conditions and Fail outcomes only."}
+            "note": ("Rates use Pass, Pass w/ Conditions and Fail outcomes only. "
+                     "passed_any_rate_pct counts both kinds of pass.")}
 
 
 def zip_fail_rates(db, year, order="highest", min_inspections=20, limit=10):

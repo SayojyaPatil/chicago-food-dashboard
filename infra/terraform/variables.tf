@@ -16,9 +16,9 @@ variable "bq_location" {
 }
 
 variable "vertex_location" {
-  description = "Vertex AI location for the model and embeddings"
+  description = "Vertex AI location for the model and embeddings. Newer Gemini models are served only from global."
   type        = string
-  default     = "us-central1"
+  default     = "global"
 }
 
 variable "image" {
@@ -28,9 +28,9 @@ variable "image" {
 }
 
 variable "agent_model" {
-  description = "Gemini model ID on Vertex AI"
+  description = "Gemini model ID on Vertex AI. Check Model Garden for retirements."
   type        = string
-  default     = "gemini-2.5-flash"
+  default     = "gemini-3.8-flash"
 }
 
 variable "github_repo" {

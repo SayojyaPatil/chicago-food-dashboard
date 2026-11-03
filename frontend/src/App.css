@@ -149,6 +149,7 @@ body {
 .band-bottom { padding: 36px 0 44px; font-size: 15px; }
 .band-bottom p { max-width: var(--measure); }
 .band-bottom p + p { margin-top: 8px; }
+.band-bottom .legal { font-size: 13px; color: var(--ink-soft); margin-top: 14px; }
 .band-bottom a { color: var(--ink); text-underline-offset: 3px; }
 
 @media (max-width: 860px) {

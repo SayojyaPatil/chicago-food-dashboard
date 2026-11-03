@@ -14,7 +14,10 @@ Tests replace this with a scripted fake.
 import os
 from dataclasses import dataclass, field
 
-DEFAULT_MODEL = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
+DEFAULT_MODEL = os.getenv("AGENT_MODEL", "gemini-3.8-flash")
+# Gemini 3 models think before answering. "low" keeps answers fast for a
+# tool-using agent; set AGENT_THINKING=default to leave it to the model.
+THINKING = os.getenv("AGENT_THINKING", "low").strip().lower()
 
 
 @dataclass
@@ -43,7 +46,7 @@ class GeminiModel:
             self._client = genai.Client(
                 vertexai=True,
                 project=os.environ.get("GCP_PROJECT"),
-                location=os.getenv("VERTEX_LOCATION", "us-central1"),
+                location=os.getenv("VERTEX_LOCATION", "global"),
             )
         return self._client
 
@@ -66,6 +69,8 @@ class GeminiSession:
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             max_output_tokens=2048,
         )
+        if THINKING in ("minimal", "low", "medium", "high") and model.model.startswith("gemini-3"):
+            self.config.thinking_config = types.ThinkingConfig(thinking_level=THINKING.upper())
 
     def _generate(self) -> Reply:
         response = self.model.client.models.generate_content(

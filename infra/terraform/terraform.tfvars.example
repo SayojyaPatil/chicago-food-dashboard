@@ -1,5 +1,6 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
 project_id = "your-project-id"
 # region          = "us-central1"
-# agent_model     = "gemini-2.5-flash"
+# agent_model     = "gemini-3.8-flash"
+# vertex_location = "global"
 # github_repo     = "SayojyaPatil/chicago-food-dashboard"

@@ -42,6 +42,9 @@ def main(argv=None):
         import requests
         print(f"Downloading {SOURCE_URL}")
         response = requests.get(SOURCE_URL, timeout=60)
+        if response.status_code == 403:
+            raise SystemExit("chicago.gov blocks script downloads. Open the URL above in a browser, "
+                             "save the PDF, then run again with --pdf <path>.")
         response.raise_for_status()
         data = response.content
 

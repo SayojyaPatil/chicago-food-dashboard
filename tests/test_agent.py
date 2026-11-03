@@ -41,6 +41,15 @@ class GuardrailTests(unittest.TestCase):
         self.assertEqual(clean["n"], 3)
         self.assertNotIn("admin", clean["rows"][0]["dba_name"])
 
+    def test_grounding_accepts_units_glued_to_numbers_in_sources(self):
+        results = [{"passages": [{"text": "held at 57C (135F) or above, or 5C (41F) or less"}]}]
+        answer = "Hot food must stay at 135°F (57°C); cold food at 41°F (5°C) or below."
+        self.assertEqual(guardrails.unverified_numbers(answer, results), [])
+
+    def test_grounding_flags_model_arithmetic(self):
+        results = [{"rows": [{"pass_rate_pct": 64.7, "fail_rate_pct": 21.1}]}]
+        self.assertEqual(guardrails.unverified_numbers("78.9% passed overall.", results), ["78.9"])
+
     def test_grounding_check(self):
         results = [{"rows": [{"fail_rate_pct": 27.44, "inspections": 1532}]}]
         ok = "60629 rose to 27.4% across 1,532 inspections in 2025 (Food Code 3-501.16)."

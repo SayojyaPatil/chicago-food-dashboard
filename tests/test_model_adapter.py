@@ -54,6 +54,11 @@ class GeminiAdapterTests(unittest.TestCase):
         declared = [f.name for f in config.tools[0].function_declarations]
         self.assertEqual(declared, [t.name for t in DATA_TOOLS])
         self.assertTrue(config.automatic_function_calling.disable)
+        self.assertIsNone(config.thinking_config)  # not a Gemini 3 model name
+
+    def test_gemini3_uses_low_thinking(self):
+        session = GeminiModel(model="gemini-3.8-flash", client=FakeClient([])).start("sys", DATA_TOOLS)
+        self.assertEqual(session.config.thinking_config.thinking_level.value, "LOW")
 
 
 if __name__ == "__main__":

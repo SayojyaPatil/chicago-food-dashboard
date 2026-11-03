@@ -116,7 +116,10 @@ def unverified_numbers(answer: str, tool_results: list, question: str = "") -> l
     """
     supported = set()
     blob = json.dumps(tool_results, default=str) + " " + question
-    for token in _numbers(blob):
+    # Source text often glues units to numbers ("57C (135F)", "41F"), so read
+    # every digit run there. Answers are still parsed strictly.
+    for token in re.findall(r"\d[\d,]*(?:\.\d+)?", blob):
+        token = token.replace(",", "")
         try:
             supported |= _variants(float(token))
         except ValueError:

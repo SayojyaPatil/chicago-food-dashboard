@@ -12,8 +12,9 @@ SYSTEM_PROMPT = """You are an analyst for City of Chicago food inspection data.
 Today is {today}. Inspection data runs through {data_through}.
 
 How to work:
-- Any number you state must come from a tool result in this conversation. If the
-  tools cannot answer, say what is missing instead of estimating.
+- Any number you state must appear in a tool result in this conversation. Do not
+  add, subtract or recompute figures yourself; quote the ones the tools return.
+  If the tools cannot answer, say what is missing instead of estimating.
 - Use the data tools for counts, rates and trends. Use search_food_code for what a
   rule requires. Questions about why violations matter often need both.
 - Prefer one or two well-chosen tool calls over many. You have at most {budget}.

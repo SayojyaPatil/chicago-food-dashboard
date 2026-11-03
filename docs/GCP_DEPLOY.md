@@ -130,31 +130,34 @@ gcloud run jobs execute food-etl --region us-central1 --wait --args="--since=201
 
 ## 6. Build the food code search index
 
-Run this once from your laptop. It downloads the official Chicago Food Code Rules PDF, splits it by section, embeds each section with Vertex AI, and loads the result into BigQuery.
+Run this once from your laptop. It splits the official Chicago Food Code Rules PDF by section, embeds each section with Vertex AI, and loads the result into BigQuery.
+
+chicago.gov blocks script downloads (HTTP 403), so download the PDF in a browser first:
+<https://www.chicago.gov/content/dam/city/depts/dol/rulesandregs/CDPH-Food-Code-Rules-02-01-2019.pdf>
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
 export GCP_PROJECT=$PROJECT
+PDF=~/Downloads/CDPH-Food-Code-Rules-02-01-2019.pdf
 
-python scripts/ingest_food_code.py --dry-run   # chunk only: check the section count looks right
-python scripts/ingest_food_code.py             # embed and load (a few minutes)
+python scripts/ingest_food_code.py --pdf $PDF --dry-run   # chunk only
+python scripts/ingest_food_code.py --pdf $PDF             # embed and load (a few minutes)
 ```
 
-- The dry run should report several hundred chunks and print the first few. If it finds 0 sections, the PDF layout changed. Paste the dry-run output into our chat and the section pattern can be adjusted.
-- If the download fails, save the PDF from <https://www.chicago.gov/content/dam/city/depts/dol/rulesandregs/CDPH-Food-Code-Rules-02-01-2019.pdf> and run `python scripts/ingest_food_code.py --pdf ./CDPH-Food-Code-Rules.pdf`.
+The dry run on the October 2023 rules gives 460 chunks from 373 sections across chapters 1 to 9.
 
 ---
 
-## 7. Confirm the model ID
+## 7. Confirm the model ID and location
 
-Gemini model names change over time. Open Console → **Vertex AI** → **Model Garden**, search "Gemini Flash", and note the current model ID. If it isn't `gemini-2.5-flash`, set it and re-apply:
+Google retires Gemini model IDs on Vertex AI regularly (`gemini-2.5-flash` was retired on October 20, 2026), and newer models are served only from the `global` location, not from regions like `us-central1`. The defaults are `agent_model = "gemini-3.8-flash"` and `vertex_location = "global"`. To check a model before switching:
 
 ```bash
-cd infra/terraform
-terraform apply -var="agent_model=<current-id>"
-cd ../..
+python -c "from google import genai; c=genai.Client(vertexai=True, project='$PROJECT', location='global'); print(c.models.generate_content(model='gemini-3.8-flash', contents='Reply with ok').text)"
 ```
+
+If the app log shows `404 NOT_FOUND ... Publisher model`, set a current model in `terraform.tfvars` and run `terraform apply`. No rebuild is needed.
 
 ---
 
@@ -182,6 +185,7 @@ gcloud run services logs read food-inspections --region us-central1 --limit 50
 
 ```bash
 export GCP_PROJECT=$PROJECT DATA_BACKEND=bigquery
+export VERTEX_LOCATION=global AGENT_MODEL=gemini-3.8-flash
 python -m evals.run_evals --list-sections | head -40    # which code sections were indexed
 python -m evals.run_evals                               # full golden set, about 29 questions
 ```
@@ -267,7 +271,8 @@ Or delete the whole project: `gcloud projects delete $PROJECT`. Workload identit
 | `terraform apply` fails with SERVICE_DISABLED | APIs still turning on. Run apply again. |
 | `gcloud builds submit` fails with PERMISSION_DENIED | Step 4's role grants for the build service account are missing. |
 | Charts show "did not load" and `/health/db` returns 503 | The app's service account can't reach BigQuery, or the dataset is empty. Run step 5 and check the logs. |
-| Agent says "not available right now" | Check the logs. Usually the model ID (step 7) or a missing Vertex AI permission. |
+| Agent says "hit an error" and logs show `404 NOT_FOUND` for a publisher model | The model ID was retired or isn't offered in that location. See step 7. |
+| Agent says "not available right now" | Check the logs. Usually a missing Vertex AI permission. |
 | Agent answers rules questions badly | The food code index is empty or stale. Run step 6. |
 | `VECTOR_SEARCH` error in the logs | `food_code_chunks` is empty. Run step 6. |
 | Scheduler shows 403 | The scheduler service account lacks invoker on the job. Re-run `terraform apply`. |
