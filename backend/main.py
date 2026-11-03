@@ -108,31 +108,37 @@ def database_health():
 
 @app.get("/metrics/pass-fail-trend")
 def pass_fail_trend():
-    """Monthly pass vs fail counts for the last 24 months."""
+    """Monthly outcomes and fail rate for the 24 months up to the newest inspection."""
     return query(metric_sql("pass_fail_trend"))
 
 
 @app.get("/metrics/risk-distribution")
 def risk_distribution():
-    """Failure rate by risk level."""
+    """Fail rate by risk level, last 12 months."""
     return query(metric_sql("risk_distribution"))
 
 
 @app.get("/metrics/top-facility-types")
 def top_facility_types():
-    """Top 10 facility types by inspection volume."""
+    """Fail rate for the 10 most inspected facility types, last 12 months."""
     return query(metric_sql("top_facility_types"))
 
 
 @app.get("/metrics/zip-fail-rates")
 def zip_fail_rates():
-    """Top 15 ZIP codes by failure count."""
+    """ZIP codes with the highest fail rates (100+ inspections), last 12 months."""
     return query(metric_sql("zip_fail_rates"))
+
+
+@app.get("/metrics/top-violations")
+def top_violations():
+    """The ten violations cited most often in the last 12 months."""
+    return query(metric_sql("top_violations"))
 
 
 @app.get("/metrics/kpi-summary")
 def kpi_summary():
-    """Top-level KPIs."""
+    """Last-12-month outcome counts and rates, plus the prior year's fail rate."""
     return query_one(metric_sql("kpi_summary"))
 
 

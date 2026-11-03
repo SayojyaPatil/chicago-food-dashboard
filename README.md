@@ -8,7 +8,7 @@ The agent answers with figures pulled live from the data and with the Chicago Fo
 
 ![Dashboard with the agent's answer and its lookups](assets/dashboard-agent-preview.png)
 
-*The preview uses sample data. The text in the answer box is placeholder text, not a real model response.*
+*The preview uses synthetic data on a local PostgreSQL database, and the answer text is a placeholder, not a real model response.*
 
 ## Two ways to run it
 
@@ -190,7 +190,7 @@ npm audit
 npm run build
 ```
 
-**Local verification:** 57 tests passed, 1 PostgreSQL integration test skipped (it runs in CI), and the production build succeeds. The agent, ETL and eval-scorer tests use fakes, so they need no cloud credentials.
+**Local verification:** 61 tests passed, 1 PostgreSQL integration test skipped (it runs in CI), and the production build succeeds. The agent, ETL and eval-scorer tests use fakes, so they need no cloud credentials.
 
 ## API routes
 
@@ -210,11 +210,15 @@ npm run build
 
 **Source:** [City of Chicago Food Inspections dataset](https://data.cityofchicago.org/resource/4ijn-s7e5.json).
 
-- The 50,000-row run is a **recent-record sample**, not the full history of Chicago inspections.
-- A pass rate here means `results = 'Pass'`; `Pass w/ Conditions` is displayed separately in monthly trends.
-- The trend query uses a rolling **24-month window**; the first and most recent months may be partial.
-- ZIP-code stacked charts show failed vs. other inspection results; the latter includes statuses beyond Pass.
-- Refreshing the ETL may change totals and rankings.
+Every rate on the page and in the agent uses the same rules:
+
+- **Only real outcomes count:** Pass, Pass w/ Conditions, and Fail. Records such as "Out of Business", "No Entry" or "Not Ready" are left out, because no food-safety inspection took place.
+- **Pass with conditions** means the inspector found problems that were fixed during the visit.
+- **"Last 12 months"** ends at the newest inspection loaded, not today's date, so an older snapshot still shows a full year.
+- **Violation shares** are the percentage of inspections that cited each checklist item. One inspection can cite several, so shares add up to more than 100%.
+- **ZIP code rates** only include ZIP codes with at least 100 inspections in the period, so small samples don't top the list.
+
+The dashboard answers four questions: is the fail rate rising or falling, what goes wrong most often, which ZIP codes have the highest and lowest fail rates, and which kinds of business fail most.
 
 ## Security and limitations
 

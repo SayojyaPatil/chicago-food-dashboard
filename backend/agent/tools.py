@@ -155,8 +155,9 @@ def top_violations(db, year, zip=None, facility_type=None, limit=10):
         ),
         items AS (
             SELECT inspection_id,
-                   SAFE_CAST(REGEXP_EXTRACT(item, r'^\\s*(\\d+)\\.') AS INT64) AS number,
-                   TRIM(REGEXP_EXTRACT(item, r'^\\s*\\d+\\.\\s*(.+?)(?:\\s+-\\s+|$)')) AS title
+                   SAFE_CAST(REGEXP_EXTRACT(TRIM(item), r'^(\\d+)\\.') AS INT64) AS number,
+                   TRIM(REGEXP_REPLACE(SPLIT(TRIM(item), ' - Comments')[OFFSET(0)],
+                                       r'^\\d+\\.\\s*', '')) AS title
             FROM scope, UNNEST(SPLIT(violations, '|')) AS item
             WHERE violations IS NOT NULL
         )

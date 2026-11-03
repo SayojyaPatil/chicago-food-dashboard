@@ -15,7 +15,7 @@ class APIUnitTests(unittest.TestCase):
         self.assertEqual(response.json(), {"status": "ok"})
 
     def test_all_list_metrics_routes(self):
-        routes = ["pass-fail-trend", "risk-distribution", "top-facility-types", "zip-fail-rates"]
+        routes = ["pass-fail-trend", "risk-distribution", "top-facility-types", "zip-fail-rates", "top-violations"]
         for route in routes:
             with self.subTest(route=route), patch.object(main, "query", return_value=[{"sample": 1}]) as query:
                 response = self.client.get(f"/metrics/{route}")

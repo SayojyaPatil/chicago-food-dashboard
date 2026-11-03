@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, LabelList,
+  Tooltip, ResponsiveContainer, LabelList, ReferenceLine, Cell,
 } from "recharts";
 import "./App.css";
 
@@ -9,7 +9,6 @@ const API = import.meta.env.VITE_API_URL ?? "";
 
 const INK = "#13294B";
 const SOFT = "#46597A";
-const MID = "#5B8DC9";
 const RED = "#C8102E";
 const PALE = "#C9DDEE";
 const GRID = "#E3ECF4";
@@ -217,147 +216,189 @@ function Answer({ run }) {
 
 // ── The record ───────────────────────────────────────────────────────────────
 
-function Record({ kpi, freshness }) {
+const KEEP_UPPER = new Set(["TCS", "HACCP", "PIC", "CFPM", "UL", "NSF", "CDPH"]);
+
+function sentenceCase(title = "") {
+  const lower = title.toLowerCase().replace(/\b(\d+)f\b/g, "$1°F");
+  const words = lower.split(/(\s+)/).map(w => (KEEP_UPPER.has(w.replace(/[^a-z]/gi, "").toUpperCase()) ? w.toUpperCase() : w));
+  const text = words.join("").replace(/\bchicago\b/g, "Chicago");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+const pct = v => (v == null ? "–" : `${Number(v).toFixed(1)}%`);
+
+function oneIn(rate) {
+  const n = Math.round(100 / Number(rate));
+  return Number.isFinite(n) && n > 1 ? `about 1 in ${n}` : pct(rate);
+}
+
+function Record({ kpi, risk }) {
   if (kpi.loading) return <p className="state-msg">Loading the inspection record…</p>;
   if (kpi.error || !kpi.data) return <p className="state-msg error" role="alert">The inspection summary did not load ({kpi.error}).</p>;
   const k = kpi.data;
-  const since = longDate(freshness.data?.earliest_inspection_date);
+  const high = risk.data?.find(r => r.risk === "High");
+  const low = risk.data?.find(r => r.risk === "Low");
   return (
     <>
       <p className="record-sentence">
-        {fmt(k.total_inspections)} inspections{since ? ` since ${since}` : ""}. {k.overall_pass_rate}% passed
-        outright and <span className="fail">{fmt(k.total_failed)} failed</span>.
+        In the last 12 months, city inspectors made {fmt(k.total_inspections)} inspections,
+        and <span className="fail">{oneIn(k.fail_rate)} failed</span>.
       </p>
       <p className="record-sub">
-        High-risk kitchens, the places handling raw food at volume, failed {k.high_risk_fail_rate}% of their
-        inspections. The record covers {fmt(k.zip_codes_covered)} ZIP codes.
+        {pct(k.overall_pass_rate)} passed, {pct(k.conditions_rate)} passed with conditions (problems found
+        and fixed during the visit), and {pct(k.fail_rate)} failed. The year before, {pct(k.prior_fail_rate)} failed.
+        {high && low ? ` Places with the most complex food handling failed ${pct(high.fail_rate_pct)} of the time, against ${pct(low.fail_rate_pct)} for the simplest.` : ""}
       </p>
     </>
   );
 }
 
-function ChartTip({ active, payload, label, unit = "" }) {
+function ChartTip({ active, payload, label, render }) {
   if (!active || !payload?.length) return null;
-  return (
-    <div className="chart-tooltip">
-      <div><b>{label}</b></div>
-      {payload.map(p => <div key={p.dataKey}>{p.name}: {fmt(p.value)}{unit}</div>)}
-    </div>
-  );
+  return <div className="chart-tooltip">{render(payload[0].payload, label)}</div>;
 }
 
 function Chart({ title, sub, state, wide, children }) {
   return (
     <section className={`chart${wide ? " wide" : ""}`}>
-      <h2>{title}</h2>
+      <h2>{state.data?.length ? title(state.data) : " "}</h2>
       {sub && <p className="chart-sub">{sub}</p>}
       {state.loading && <p className="state-msg">Loading…</p>}
       {state.error && <p className="state-msg error">This chart did not load ({state.error}).</p>}
-      {state.data && children(state.data)}
+      {state.data && (state.data.length ? children(state.data) : <p className="state-msg">No inspections in this period.</p>)}
     </section>
   );
 }
 
 const axis = { fill: SOFT, fontSize: 13 };
 
-function Trend() {
+function monthLabel(m) {
+  const d = new Date(`${m}-15T12:00:00`);
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+}
+
+function Trend({ kpi }) {
   const state = useFetch("/metrics/pass-fail-trend");
+  const k = kpi.data;
+  const title = () => {
+    if (!k?.fail_rate || !k?.prior_fail_rate) return "Is it getting better or worse?";
+    const diff = Number(k.fail_rate) - Number(k.prior_fail_rate);
+    if (Math.abs(diff) < 0.5) return `Failures held steady: ${pct(k.fail_rate)} this year, ${pct(k.prior_fail_rate)} the year before`;
+    return `Failures went ${diff < 0 ? "down" : "up"}: ${pct(k.fail_rate)} this year, ${pct(k.prior_fail_rate)} the year before`;
+  };
   return (
-    <Chart wide state={state} title="Outcomes by month"
-      sub="Inspections per month over the last two years. The newest month is usually still filling in.">
+    <Chart wide state={state} title={title}
+      sub="Share of inspections that failed, month by month, over two years. The latest month may be incomplete.">
       {data => (
-        <>
-          <div className="legend">
-            <span><i style={{ background: INK }} />Pass</span>
-            <span><i style={{ background: MID }} />Pass with conditions</span>
-            <span><i style={{ background: RED }} />Fail</span>
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={data} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
-              <CartesianGrid stroke={GRID} vertical={false} />
-              <XAxis dataKey="month" tick={axis} tickLine={false} axisLine={{ stroke: PALE }} minTickGap={40} />
-              <YAxis tick={axis} tickLine={false} axisLine={false} width={48} />
-              <Tooltip content={<ChartTip />} />
-              <Line type="linear" dataKey="pass" name="Pass" stroke={INK} strokeWidth={2.25} dot={false} />
-              <Line type="linear" dataKey="pass_conditions" name="Pass with conditions" stroke={MID} strokeWidth={2} dot={false} />
-              <Line type="linear" dataKey="fail" name="Fail" stroke={RED} strokeWidth={2.25} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </>
-      )}
-    </Chart>
-  );
-}
-
-function Risk() {
-  const state = useFetch("/metrics/risk-distribution");
-  return (
-    <Chart state={state} title="Fail rate by risk level"
-      sub="The city rates each business by how much risky food handling it does.">
-      {data => (
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={data} margin={{ top: 22, right: 8, left: -8, bottom: 0 }} barCategoryGap="34%">
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={data} margin={{ top: 12, right: 16, left: -6, bottom: 0 }}>
             <CartesianGrid stroke={GRID} vertical={false} />
-            <XAxis dataKey="risk" tick={{ ...axis, fill: INK, fontSize: 14 }} tickLine={false} axisLine={{ stroke: PALE }} />
-            <YAxis tick={axis} tickLine={false} axisLine={false} unit="%" width={48} />
-            <Tooltip content={<ChartTip unit="%" />} cursor={{ fill: "#F2F8FC" }} />
-            <Bar dataKey="fail_rate_pct" name="Fail rate" fill={RED}>
-              <LabelList dataKey="fail_rate_pct" position="top" formatter={v => `${v}%`} style={{ fill: INK, fontSize: 13 }} />
-            </Bar>
-          </BarChart>
+            <XAxis dataKey="month" tick={axis} tickLine={false} axisLine={{ stroke: PALE }} minTickGap={36} tickFormatter={monthLabel} />
+            <YAxis tick={axis} tickLine={false} axisLine={false} width={48} unit="%" domain={[0, "auto"]} />
+            {k?.fail_rate && <ReferenceLine y={Number(k.fail_rate)} stroke={SOFT} strokeDasharray="4 4"
+              label={{ value: `12-month average ${pct(k.fail_rate)}`, position: "insideTopLeft", fill: SOFT, fontSize: 12 }} />}
+            <Tooltip content={<ChartTip render={r => (
+              <><b>{monthLabel(r.month)}</b><div>{pct(r.fail_rate_pct)} failed</div><div>{fmt(r.fail)} of {fmt(r.inspections)} inspections</div></>
+            )} />} />
+            <Line type="linear" dataKey="fail_rate_pct" name="Fail rate" stroke={RED} strokeWidth={2.5}
+              dot={{ r: 2.5, fill: RED, strokeWidth: 0 }} activeDot={{ r: 5 }} />
+          </LineChart>
         </ResponsiveContainer>
       )}
     </Chart>
   );
 }
 
-function Facilities() {
-  const state = useFetch("/metrics/top-facility-types");
+function Violations() {
+  const state = useFetch("/metrics/top-violations");
+  const narrow = typeof window !== "undefined" && window.innerWidth < 520;
   return (
-    <Chart state={state} title="Pass rate by kind of business" sub="The ten most inspected facility types.">
-      {data => (
-        <ResponsiveContainer width="100%" height={340}>
-          <BarChart data={data} layout="vertical" margin={{ top: 0, right: 44, left: 0, bottom: 0 }}>
-            <XAxis type="number" domain={[0, 100]} hide />
-            <YAxis type="category" dataKey="facility_type" width={typeof window !== "undefined" && window.innerWidth < 520 ? 128 : 170} tickLine={false} axisLine={false}
-              tick={{ fill: INK, fontSize: 13 }}
-              tickFormatter={l => (l.length > 24 ? `${l.slice(0, 22)}…` : l)} />
-            <Tooltip content={<ChartTip unit="%" />} cursor={{ fill: "#F2F8FC" }} />
-            <Bar dataKey="pass_rate_pct" name="Pass rate" fill={INK} barSize={14}>
-              <LabelList dataKey="pass_rate_pct" position="right" formatter={v => `${v}%`} style={{ fill: INK, fontSize: 13 }} />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      )}
-    </Chart>
-  );
-}
-
-function Zips() {
-  const state = useFetch("/metrics/zip-fail-rates");
-  return (
-    <Chart wide state={state} title="Where failures add up"
-      sub="The 15 ZIP codes with the most failed inspections, against all their other results.">
+    <Chart wide state={state}
+      title={d => `Most common problem: ${sentenceCase(d[0].title).toLowerCase()}, found in ${pct(d[0].share_pct)} of inspections`}
+      sub="Share of inspections in the last 12 months that cited each problem. One inspection can cite several, so the bars add up to more than 100%.">
       {data => {
-        const rows = data.map(r => ({ ...r, other: Math.max(0, Number(r.total_inspections) - Number(r.failed)) }));
+        const rows = data.map(r => ({ ...r, label: `${r.violation_number}. ${sentenceCase(r.title)}` }));
+        return (
+          <ResponsiveContainer width="100%" height={rows.length * 38 + 10}>
+            <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
+              <XAxis type="number" hide domain={[0, "dataMax"]} />
+              <YAxis type="category" dataKey="label" width={narrow ? 150 : 430} tickLine={false} axisLine={false}
+                tick={{ fill: INK, fontSize: 13 }}
+                tickFormatter={l => { const max = narrow ? 22 : 62; return l.length > max ? `${l.slice(0, max - 1)}…` : l; }} />
+              <Tooltip cursor={{ fill: "#F2F8FC" }} content={<ChartTip render={r => (
+                <><b>{r.label}</b><div>{fmt(r.inspections_cited)} inspections ({pct(r.share_pct)})</div></>
+              )} />} />
+              <Bar dataKey="share_pct" fill={INK} barSize={16}>
+                <LabelList dataKey="share_pct" position="right" formatter={pct} style={{ fill: INK, fontSize: 13 }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        );
+      }}
+    </Chart>
+  );
+}
+
+function RateBars({ data, labelKey, city, height, labelWidth, max }) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} layout="vertical" margin={{ top: 18, right: 52, left: 0, bottom: 0 }}>
+        <XAxis type="number" hide domain={[0, dataMax => Math.max(max || dataMax, dataMax, Number(city || 0)) * 1.1]} />
+        <YAxis type="category" dataKey={labelKey} width={labelWidth} tickLine={false} axisLine={false}
+          tick={{ fill: INK, fontSize: 13 }} tickFormatter={l => (l.length > 22 ? `${l.slice(0, 21)}…` : l)} />
+        <Tooltip cursor={{ fill: "#F2F8FC" }} content={<ChartTip render={r => (
+          <><b>{r[labelKey]}</b><div>{pct(r.fail_rate_pct)} failed</div><div>{fmt(r.failed)} of {fmt(r.total_inspections)} inspections</div></>
+        )} />} />
+        {city && <ReferenceLine x={Number(city)} stroke={SOFT} strokeDasharray="4 4"
+          label={{ value: `City ${pct(city)}`, position: "top", fill: SOFT, fontSize: 12 }} />}
+        <Bar dataKey="fail_rate_pct" barSize={14}>
+          {data.map(r => <Cell key={r[labelKey]} fill={Number(r.fail_rate_pct) > Number(city) ? RED : PALE} />)}
+          <LabelList dataKey="fail_rate_pct" position="right" formatter={pct} style={{ fill: INK, fontSize: 13 }} />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function Zips({ kpi }) {
+  const state = useFetch("/metrics/zip-fail-rates");
+  const city = kpi.data?.fail_rate;
+  return (
+    <Chart state={state}
+      title={d => `ZIP codes range from ${pct(d[d.length - 1].fail_rate_pct)} to ${pct(d[0].fail_rate_pct)} failed`}
+      sub="Highest and lowest fail rates among ZIP codes with at least 100 inspections in the last 12 months. Red bars are above the citywide rate.">
+      {data => {
+        const top = data.slice(0, 6);
+        const bottom = data.length > 10 ? data.slice(-4) : data.slice(6);
+        const max = Number(data[0].fail_rate_pct);
         return (
           <>
-            <div className="legend">
-              <span><i style={{ background: RED }} />Failed</span>
-              <span><i style={{ background: PALE }} />Other results</span>
-            </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={rows} margin={{ top: 8, right: 8, left: -8, bottom: 0 }} barCategoryGap="22%">
-                <CartesianGrid stroke={GRID} vertical={false} />
-                <XAxis dataKey="zip" tick={axis} tickLine={false} axisLine={{ stroke: PALE }} />
-                <YAxis tick={axis} tickLine={false} axisLine={false} width={48} />
-                <Tooltip content={<ChartTip />} cursor={{ fill: "#F2F8FC" }} />
-                <Bar dataKey="failed" name="Failed" stackId="z" fill={RED} />
-                <Bar dataKey="other" name="Other results" stackId="z" fill={PALE} />
-              </BarChart>
-            </ResponsiveContainer>
+            <h3 className="chart-group">Highest</h3>
+            <RateBars data={top} labelKey="zip" city={city} max={max} height={top.length * 30 + 30} labelWidth={64} />
+            {bottom.length > 0 && (
+              <>
+                <h3 className="chart-group">Lowest</h3>
+                <RateBars data={bottom} labelKey="zip" city={city} max={max} height={bottom.length * 30 + 30} labelWidth={64} />
+              </>
+            )}
           </>
         );
+      }}
+    </Chart>
+  );
+}
+
+function Facilities({ kpi }) {
+  const state = useFetch("/metrics/top-facility-types");
+  const city = kpi.data?.fail_rate;
+  return (
+    <Chart state={state}
+      title={d => { const worst = [...d].sort((a, b) => b.fail_rate_pct - a.fail_rate_pct)[0]; return `Highest fail rate by kind of business: ${worst.facility_type}, ${pct(worst.fail_rate_pct)}`; }}
+      sub="Fail rate for the ten most inspected kinds of business, last 12 months. Red bars are above the citywide rate.">
+      {data => {
+        const rows = [...data].sort((a, b) => b.fail_rate_pct - a.fail_rate_pct);
+        return <RateBars data={rows} labelKey="facility_type" city={city} height={rows.length * 30 + 30}
+          labelWidth={typeof window !== "undefined" && window.innerWidth < 520 ? 128 : 170} />;
       }}
     </Chart>
   );
@@ -378,6 +419,7 @@ function FreshnessLine({ state }) {
 
 export default function App() {
   const kpi = useFetch("/metrics/kpi-summary");
+  const risk = useFetch("/metrics/risk-distribution");
   const freshness = useFetch("/metrics/freshness");
 
   return (
@@ -393,12 +435,12 @@ export default function App() {
       </header>
 
       <main className="wrap">
-        <section className="record"><Record kpi={kpi} freshness={freshness} /></section>
+        <section className="record"><Record kpi={kpi} risk={risk} /></section>
         <div className="charts">
-          <Trend />
-          <Risk />
-          <Facilities />
-          <Zips />
+          <Trend kpi={kpi} />
+          <Violations />
+          <Zips kpi={kpi} />
+          <Facilities kpi={kpi} />
         </div>
       </main>
 
