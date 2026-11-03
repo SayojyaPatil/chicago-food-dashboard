@@ -297,6 +297,17 @@ function coverage(freshness) {
   return { full: false, label: `since ${since}` };
 }
 
+// Value label with a white outline, so reference lines pass behind the number.
+function ValueLabel({ x, y, width, height, value }) {
+  if (value == null) return null;
+  return (
+    <text x={x + width + 6} y={y + height / 2} dy={4} fill={INK} fontSize={13}
+      stroke="#FFFFFF" strokeWidth={5} strokeLinejoin="round" paintOrder="stroke">
+      {pct(value)}
+    </text>
+  );
+}
+
 const capitalize = t => t.charAt(0).toUpperCase() + t.slice(1);
 
 function monthLabel(m) {
@@ -395,7 +406,7 @@ function RateBars({ data, labelKey, city, height, labelWidth, max }) {
           label={{ value: `City ${pct(city)}`, position: "top", fill: SOFT, fontSize: 12 }} />}
         <Bar dataKey="fail_rate_pct" barSize={14}>
           {data.map(r => <Cell key={r[labelKey]} fill={Number(r.fail_rate_pct) > Number(city) ? RED : PALE} />)}
-          <LabelList dataKey="fail_rate_pct" position="right" formatter={pct} style={{ fill: INK, fontSize: 13 }} />
+          <LabelList dataKey="fail_rate_pct" content={<ValueLabel />} />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
