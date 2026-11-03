@@ -1,0 +1,41 @@
+name: Agent evals
+on:
+  pull_request:
+    paths: ["backend/agent/**", "evals/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  evals:
+    # Needs the GCP variables and secrets from deploy.yml; skipped until they exist.
+    if: vars.GCP_PROJECT != ''
+    runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      DATA_BACKEND: bigquery
+      VERTEX_LOCATION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - run: python -m pip install -r backend/requirements.txt
+      - name: Run the golden question set
+        run: python -m evals.run_evals
+      - name: Publish results
+        if: always()
+        run: cat evals/results/latest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: evals/results/

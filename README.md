@@ -1,48 +1,77 @@
-# Chicago Food Safety Dashboard
+# Chicago Food Inspections
 
-[Live URL](https://chicago-food-frontend-production.up.railway.app)
+[Live URL (v1, Railway)](https://chicago-food-frontend-production.up.railway.app)
 
-**Chicago inspection data → Python ETL → PostgreSQL → FastAPI → React/Recharts**
+**Chicago inspection data, refreshed daily into BigQuery, with a dashboard and an analyst agent you can ask questions in plain English.**
 
-A full-stack data engineering and analytics project that turns public City of Chicago food inspection records into interactive inspection trends, compliance KPIs, facility comparisons, and ZIP-code breakdowns.
+The agent answers with figures pulled live from the data and with the Chicago Food Code rule behind each violation. It shows every lookup it made while answering.
 
-> **Data freshness:** This is an on-demand **snapshot**, not a live feed. Re-run the ETL to refresh PostgreSQL. The demonstrated local run loaded **50,000 inspection records**; your results will depend on when and how much data you ingest.
+![Dashboard with the agent's answer and its lookups](assets/dashboard-agent-preview.png)
 
-## Dashboard
+*The preview uses sample data. The text in the answer box is placeholder text, not a real model response.*
 
-The dashboard includes:
+## Two ways to run it
 
-- Five KPIs: total inspections, pass rate, failures, high-risk failure rate, and ZIP codes covered
-- Monthly outcomes (Pass, Fail, Pass with Conditions), with the displayed date range based on returned data
-- Failure rates by inspection risk level
-- Pass rates for the ten most frequently inspected facility types
-- Top 15 ZIP codes by failed inspections, with stacked failed and other-result counts
+| | v1: PostgreSQL (original) | v2: Google Cloud |
+| --- | --- | --- |
+| Data | On-demand snapshot, `python etl/etl.py` | Daily incremental load: Cloud Scheduler → Cloud Run job → BigQuery `MERGE` |
+| API | FastAPI + PostgreSQL | Same FastAPI app, `DATA_BACKEND=bigquery` |
+| Agent | Not available | Gemini on Vertex AI with tool calling and food code search (RAG) |
+| Hosting | Railway | Cloud Run, all infrastructure in Terraform |
+| Deploys | Railway | GitHub Actions with Workload Identity Federation (no key files) |
 
-## Dashboard Preview
+`DATA_BACKEND` defaults to `postgres`, so v1 keeps working unchanged. **Deploy v2 with [docs/GCP_DEPLOY.md](docs/GCP_DEPLOY.md).**
 
-![Chicago Food Safety Dashboard](assets/dashboard.png)
-
-## Architecture
+## Architecture (v2)
 
 ```mermaid
 flowchart LR
-    A[City of Chicago Open Data<br/>Socrata API] --> B[Python ETL<br/>Pagination, validation, retries]
-    B --> C[(PostgreSQL<br/>Inspections table)]
-    C --> D[FastAPI<br/>SQL metrics endpoints]
-    D --> E[React + Recharts<br/>Analytics dashboard]
+    S[City of Chicago<br/>Socrata API] -->|daily, 6:15 CT| J[Cloud Run job<br/>incremental ETL]
+    J -->|MERGE on inspection_id| BQ[(BigQuery<br/>inspections, etl_runs,<br/>food_code_chunks)]
+    PDF[Chicago Food Code<br/>Rules PDF] -->|chunk + embed once| BQ
+    BQ --> API[Cloud Run service<br/>FastAPI + React]
+    API <-->|function calling| G[Gemini on Vertex AI]
+    API -->|embeddings| E[Vertex AI embeddings]
 ```
 
-The ETL fetches inspection records in 1,000-record pages, normalizes fields, and performs full-record upserts keyed on `inspection_id`. It uses request timeouts, limited retries, and transaction rollback on failed loads. The backend runs SQL aggregates against PostgreSQL; the frontend queries those API endpoints.
+### How the agent works
+
+1. The question passes a length check, then goes to Gemini along with descriptions of six tools.
+2. Five tools are **fixed, parameterized BigQuery queries**: citywide totals, ZIP fail rates, year-over-year ZIP changes, most cited violations, and business lookup. The model picks a tool and fills in arguments; it never writes SQL. Arguments are validated and bound as query parameters.
+3. The sixth tool, **food code search**, embeds the question and runs BigQuery `VECTOR_SEARCH` over the Chicago Food Code Rules, chunked one section per row.
+4. Guardrails:
+   - Text that reads like instructions is stripped from tool results before the model sees it.
+   - Each question is capped at 6 tool calls.
+   - Every number in the answer is checked against the tool results, and any number that doesn't match is flagged in the UI.
+   - Requests are rate-limited per client.
+5. The API streams each lookup to the browser as it happens (newline-delimited JSON), then streams the answer and the cited sections.
+
+### Evaluation
+
+`evals/questions.json` holds 29 questions across data, rules, combined and safety cases. Ground truth is computed at eval time by running the same query directly, so the expected answers track the daily refresh. `python -m evals.run_evals` scores:
+
+- tool choice and arguments
+- answer correctness
+- retrieval of the right code section
+- grounding of every stated number
+- safety: no prompt leaks, no tool use on off-topic requests
+- P50/P95 latency
+
+The eval workflow runs it on pull requests that touch the agent and fails below set thresholds.
+
+Results are written to `evals/results/` after each run.
 
 ## Technology
 
 | Layer | Stack |
 | --- | --- |
-| Data ingestion | Python, Requests |
-| Database | PostgreSQL, psycopg2 |
+| Data ingestion | Python, Requests; BigQuery load + MERGE (v2) |
+| Database | PostgreSQL, psycopg2 (v1); BigQuery (v2) |
 | Backend | FastAPI, Uvicorn |
-| Frontend | React 18, Recharts 2, Vite 8 |
-| Quality | Python `unittest`, GitHub Actions, npm build checks |
+| AI | Gemini on Vertex AI (function calling), Vertex AI embeddings, BigQuery `VECTOR_SEARCH` |
+| Cloud | Cloud Run (service + job), Cloud Scheduler, Artifact Registry, Cloud Build, Terraform |
+| Frontend | React 18, Recharts 2, Vite 8, Archivo (self-hosted) |
+| Quality | Python `unittest`, agent eval suite, GitHub Actions, npm build checks |
 
 Recharts 2 remains in use; its v3 migration is a future maintenance task.
 
@@ -51,27 +80,22 @@ Recharts 2 remains in use; its v3 migration is a future maintenance task.
 ```text
 chicago-food-dashboard/
 ├── backend/
-│   ├── main.py
-│   └── requirements.txt
+│   ├── main.py              # API routes, agent endpoint, static files
+│   ├── sql.py               # metric queries for PostgreSQL and BigQuery
+│   ├── bigquery_store.py
+│   └── agent/               # tools, retrieval, guardrails, model adapter, loop
 ├── etl/
-│   └── etl.py
-├── frontend/
-│   ├── index.html
-│   ├── package.json
-│   ├── package-lock.json
-│   ├── vite.config.mjs
-│   └── src/
-│       ├── App.jsx
-│       ├── App.css
-│       └── main.jsx
+│   ├── etl.py               # v1: Socrata -> PostgreSQL
+│   └── bq_load.py           # v2: incremental Socrata -> BigQuery
+├── scripts/ingest_food_code.py
+├── evals/                   # golden questions, scorer, runner
+├── frontend/                # React app
+├── infra/terraform/         # all GCP resources
 ├── tests/
-│   ├── test_api.py
-│   ├── test_etl.py
-│   ├── test_pipeline.py
-│   └── test_postgres_integration.py
-├── .github/workflows/ci.yml
-├── .env.example
-└── README.md
+├── docs/GCP_DEPLOY.md
+├── Dockerfile               # one image for the web service and the ETL job
+├── cloudbuild.yaml
+└── .github/workflows/       # ci.yml, deploy.yml, agent-evals.yml
 ```
 
 ## Run locally
@@ -141,7 +165,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://localhost:5173>. The app defaults to `http://localhost:8000`; to override it, create `frontend/.env.local`:
+Open <http://localhost:5173>. In development, Vite forwards API calls to `http://localhost:8000`. To call a different API origin, create `frontend/.env.local`:
 
 ```dotenv
 VITE_API_URL=http://localhost:8001
@@ -166,7 +190,7 @@ npm audit
 npm run build
 ```
 
-**Local verification:** 16 tests passed, 1 integration test skipped, production build successful, and 0 npm vulnerabilities reported.
+**Local verification:** 57 tests passed, 1 PostgreSQL integration test skipped (it runs in CI), and the production build succeeds. The agent, ETL and eval-scorer tests use fakes, so they need no cloud credentials.
 
 ## API routes
 
@@ -179,6 +203,8 @@ npm run build
 | GET | `/metrics/risk-distribution` | Failure rates by risk category |
 | GET | `/metrics/top-facility-types` | Pass rates for common facility types |
 | GET | `/metrics/zip-fail-rates` | ZIP-code inspection and failure counts |
+| GET | `/metrics/freshness` | Newest inspection loaded and last successful refresh |
+| POST | `/agent/ask` | Ask the agent (BigQuery backend); streams NDJSON events |
 
 ## Data and interpretation
 
@@ -192,8 +218,9 @@ npm run build
 
 ## Security and limitations
 
-- Credentials are read from environment variables; commit only `.env.example`, never `.env`.
-- CORS origins are configurable with `CORS_ORIGINS` and default to local development origins.
-- The backend currently opens synchronous database connections per request; connection pooling would be a future enhancement.
-- Ingestion is manual rather than scheduled and capped by `ETL_LIMIT`.
-- No production authentication or published live demo is provided by this repository.
+- Credentials come from environment variables (v1) or service accounts with narrow roles (v2). There are no key files: GitHub Actions signs in through Workload Identity Federation.
+- The agent's tools are read-only, parameterized queries. The model cannot run arbitrary SQL.
+- The agent can be wrong. Numbers it states that don't appear in its tool results are flagged in the UI, and every lookup is shown.
+- The per-client rate limit is held in memory per Cloud Run instance, which is enough for a demo but not a strict quota.
+- The eval set is small (29 questions) and hand-written. It catches regressions; it doesn't prove general accuracy.
+- v1 opens a database connection per request and ingests manually. v2 replaces both with BigQuery and a daily job.

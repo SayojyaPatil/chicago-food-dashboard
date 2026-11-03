@@ -1,14 +1,27 @@
 """
-Chicago Food Inspections — FastAPI Backend
-Uses psycopg2 (sync) to avoid asyncpg Python 3.13 compile issues.
+Chicago Food Inspections — FastAPI backend.
+
+DATA_BACKEND=postgres (default) runs the original PostgreSQL setup.
+DATA_BACKEND=bigquery reads from BigQuery and enables the /agent/ask endpoint.
+When STATIC_DIR points at the built React app, the same service serves it.
 """
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import json
+import os
+import queue
+import threading
+import time
+from collections import defaultdict, deque
+
 import psycopg2
 import psycopg2.extras
-import os
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from backend.sql import backend_name, metric_sql
 
 load_dotenv()
 
@@ -17,7 +30,7 @@ ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv(
     "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",") if origin.strip()]
 
-# Parse DATABASE_URL or fall back to individual vars
+
 def get_conn():
     if DATABASE_URL:
         return psycopg2.connect(DATABASE_URL)
@@ -29,7 +42,8 @@ def get_conn():
         password=os.getenv("DB_PASSWORD", ""),
     )
 
-def query(sql: str, params=None):
+
+def _pg_query(sql, params=None):
     conn = get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -38,27 +52,29 @@ def query(sql: str, params=None):
     finally:
         conn.close()
 
+
+def query(sql: str, params=None):
+    if backend_name() == "bigquery":
+        from backend import bigquery_store
+        return bigquery_store.run(sql, params)
+    return _pg_query(sql, params)
+
+
 def query_one(sql: str, params=None):
-    conn = get_conn()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, params)
-            row = cur.fetchone()
-            return dict(row) if row else {}
-    finally:
-        conn.close()
+    rows = query(sql, params)
+    return rows[0] if rows else {}
 
 
 app = FastAPI(
     title="Chicago Food Inspections API",
-    description="Aggregated BI metrics from Chicago Dept of Public Health inspection data.",
-    version="1.0.0",
+    description="Inspection metrics and an inspection-analyst agent.",
+    version="2.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -70,8 +86,13 @@ def health():
 
 @app.get("/health/db")
 def database_health():
-    """Readiness check: raises 503 when PostgreSQL is unreachable."""
-    from fastapi import HTTPException
+    """Readiness check: 503 when the database is unreachable."""
+    if backend_name() == "bigquery":
+        try:
+            query("SELECT 1 AS ok")
+        except Exception:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        return {"status": "ok", "database": "bigquery"}
     try:
         conn = get_conn()
         try:
@@ -88,100 +109,107 @@ def database_health():
 @app.get("/metrics/pass-fail-trend")
 def pass_fail_trend():
     """Monthly pass vs fail counts for the last 24 months."""
-    return query("""
-        SELECT
-            TO_CHAR(DATE_TRUNC('month', inspection_date), 'YYYY-MM') AS month,
-            COUNT(*) FILTER (WHERE results = 'Pass')               AS pass,
-            COUNT(*) FILTER (WHERE results = 'Fail')               AS fail,
-            COUNT(*) FILTER (WHERE results = 'Pass w/ Conditions') AS pass_conditions
-        FROM inspections
-        WHERE inspection_date >= NOW() - INTERVAL '24 months'
-          AND results IN ('Pass', 'Fail', 'Pass w/ Conditions')
-        GROUP BY 1
-        ORDER BY 1;
-    """)
+    return query(metric_sql("pass_fail_trend"))
 
 
 @app.get("/metrics/risk-distribution")
 def risk_distribution():
-    """Count of inspections by risk level."""
-    return query("""
-        SELECT
-            risk,
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE results = 'Fail')  AS failed,
-            ROUND(
-                100.0 * COUNT(*) FILTER (WHERE results = 'Fail') / NULLIF(COUNT(*), 0), 1
-            ) AS fail_rate_pct
-        FROM inspections
-        WHERE risk IS NOT NULL
-        GROUP BY risk
-        ORDER BY
-            CASE risk
-                WHEN 'High'   THEN 1
-                WHEN 'Medium' THEN 2
-                WHEN 'Low'    THEN 3
-                ELSE 4
-            END;
-    """)
+    """Failure rate by risk level."""
+    return query(metric_sql("risk_distribution"))
 
 
 @app.get("/metrics/top-facility-types")
 def top_facility_types():
     """Top 10 facility types by inspection volume."""
-    return query("""
-        SELECT
-            facility_type,
-            COUNT(*)                                               AS total_inspections,
-            COUNT(*) FILTER (WHERE results = 'Pass')              AS passed,
-            COUNT(*) FILTER (WHERE results = 'Fail')              AS failed,
-            ROUND(
-                100.0 * COUNT(*) FILTER (WHERE results = 'Pass') / NULLIF(COUNT(*), 0), 1
-            ) AS pass_rate_pct
-        FROM inspections
-        WHERE facility_type IS NOT NULL
-        GROUP BY facility_type
-        ORDER BY total_inspections DESC
-        LIMIT 10;
-    """)
+    return query(metric_sql("top_facility_types"))
 
 
 @app.get("/metrics/zip-fail-rates")
 def zip_fail_rates():
-    """Top 15 zip codes by failure count."""
-    return query("""
-        SELECT
-            zip,
-            COUNT(*)                                              AS total_inspections,
-            COUNT(*) FILTER (WHERE results = 'Fail')             AS failed,
-            ROUND(
-                100.0 * COUNT(*) FILTER (WHERE results = 'Fail') / NULLIF(COUNT(*), 0), 1
-            ) AS fail_rate_pct
-        FROM inspections
-        WHERE zip IS NOT NULL
-        GROUP BY zip
-        HAVING COUNT(*) >= 20
-        ORDER BY failed DESC
-        LIMIT 15;
-    """)
+    """Top 15 ZIP codes by failure count."""
+    return query(metric_sql("zip_fail_rates"))
 
 
 @app.get("/metrics/kpi-summary")
 def kpi_summary():
     """Top-level KPIs."""
-    return query_one("""
-        SELECT
-            COUNT(*)                                                          AS total_inspections,
-            COUNT(*) FILTER (WHERE results = 'Pass')                         AS total_passed,
-            COUNT(*) FILTER (WHERE results = 'Fail')                         AS total_failed,
-            ROUND(
-                100.0 * COUNT(*) FILTER (WHERE results = 'Pass') / NULLIF(COUNT(*), 0), 1
-            )                                                                 AS overall_pass_rate,
-            COUNT(*) FILTER (WHERE risk = 'High' AND results = 'Fail')       AS high_risk_failures,
-            ROUND(
-                100.0 * COUNT(*) FILTER (WHERE risk = 'High' AND results = 'Fail')
-                / NULLIF(COUNT(*) FILTER (WHERE risk = 'High'), 0), 1
-            )                                                                 AS high_risk_fail_rate,
-            COUNT(DISTINCT zip)                                               AS zip_codes_covered
-        FROM inspections;
-    """)
+    return query_one(metric_sql("kpi_summary"))
+
+
+@app.get("/metrics/freshness")
+def freshness():
+    """Newest inspection loaded and when the ETL last succeeded."""
+    return query_one(metric_sql("freshness"))
+
+
+# ── Agent ────────────────────────────────────────────────────────────────────
+
+ASK_LIMIT = int(os.getenv("ASK_RATE_LIMIT", "12"))       # questions ...
+ASK_WINDOW = int(os.getenv("ASK_RATE_WINDOW", "600"))    # ... per 10 minutes per client
+_recent = defaultdict(deque)
+_recent_lock = threading.Lock()
+
+
+def _allow(client_id: str) -> bool:
+    now = time.time()
+    with _recent_lock:
+        hits = _recent[client_id]
+        while hits and now - hits[0] > ASK_WINDOW:
+            hits.popleft()
+        if len(hits) >= ASK_LIMIT:
+            return False
+        hits.append(now)
+        return True
+
+
+class Question(BaseModel):
+    question: str
+
+
+def get_agent():
+    from backend.agent import build_agent
+    return build_agent()
+
+
+@app.post("/agent/ask")
+def ask(body: Question, request: Request):
+    """Stream the agent's work as newline-delimited JSON events:
+    tool_start, tool_end, then one final 'answer' (or 'error')."""
+    if backend_name() != "bigquery" and not os.getenv("AGENT_ALLOW_ANY_BACKEND"):
+        raise HTTPException(status_code=503, detail="The agent runs on the BigQuery backend.")
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client_id = forwarded.split(",")[0].strip() or (request.client.host if request.client else "?")
+    if not _allow(client_id):
+        raise HTTPException(status_code=429, detail="Too many questions. Try again in a few minutes.")
+
+    try:
+        agent = get_agent()
+    except Exception as exc:
+        print(f"[agent] could not start: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=503, detail="The agent is not available right now.")
+    events: queue.Queue = queue.Queue()
+
+    def work():
+        try:
+            result = agent.ask(body.question, on_event=lambda k, d: events.put({"type": k, **d}))
+            events.put({"type": "answer", **result.public()})
+        except Exception as exc:
+            print(f"[agent] error: {type(exc).__name__}: {exc}")
+            events.put({"type": "error", "detail": "The agent hit an error. Please try again."})
+        events.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def stream():
+        while (event := events.get()) is not None:
+            yield json.dumps(event, default=str) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+# ── Static frontend (single-service deploys) ────────────────────────────────
+
+STATIC_DIR = os.getenv("STATIC_DIR", "")
+if STATIC_DIR and os.path.isdir(STATIC_DIR):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="frontend")

@@ -7,6 +7,7 @@ export default defineConfig({
     proxy: {
       "/metrics": "http://localhost:8000",
       "/health":  "http://localhost:8000",
+      "/agent":   "http://localhost:8000",
     },
   },
 });

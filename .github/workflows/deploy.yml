@@ -1,0 +1,40 @@
+name: Deploy to Cloud Run
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Set these in GitHub: Settings > Secrets and variables > Actions
+#   Variables: GCP_PROJECT, GCP_REGION (e.g. us-central1)
+#   Secrets:   GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT  (terraform output)
+permissions:
+  contents: read
+  id-token: write   # lets GitHub sign in to Google Cloud without a key file
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    if: vars.GCP_PROJECT != ''
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT }}/food-safety/app:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+      - run: docker build -t "$IMAGE" .
+      - run: docker push "$IMAGE"
+      - name: Deploy web service
+        run: gcloud run deploy food-inspections --image "$IMAGE" --region ${{ vars.GCP_REGION }} --quiet
+      - name: Point the ETL job at the same image
+        run: gcloud run jobs update food-etl --image "$IMAGE" --region ${{ vars.GCP_REGION }} --quiet
+      - name: Smoke test
+        run: |
+          URL=$(gcloud run services describe food-inspections --region ${{ vars.GCP_REGION }} --format='value(status.url)')
+          curl --fail --silent "$URL/health"
+          curl --fail --silent "$URL/health/db"

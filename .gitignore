@@ -44,3 +44,13 @@ frontend/coverage/
 # Build artifacts
 build/
 dist/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform.lock.hcl.bak
+
+# Eval output
+evals/results/
