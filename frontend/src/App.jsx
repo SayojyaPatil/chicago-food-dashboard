@@ -49,14 +49,14 @@ function longDate(iso) {
   return d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 }
 
-function Star() {
-  // Six-pointed star from the Chicago flag
-  const pts = Array.from({ length: 12 }, (_, i) => {
-    const r = i % 2 === 0 ? 11 : 5.2;
-    const a = (Math.PI / 6) * i - Math.PI / 2;
-    return `${12 + r * Math.cos(a)},${12 + r * Math.sin(a)}`;
-  }).join(" ");
-  return <svg className="star" viewBox="0 0 24 24" aria-hidden="true"><polygon points={pts} /></svg>;
+function Mark() {
+  // An inspection checklist box with a tick. Our own mark, not a city symbol.
+  return (
+    <svg className="mark" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M7.5 12.5l3 3 6-7" />
+    </svg>
+  );
 }
 
 // ── Asking ───────────────────────────────────────────────────────────────────
@@ -497,7 +497,7 @@ export default function App() {
       <header className="band band-top">
         <div className="wrap">
           <div className="masthead">
-            <div className="brand"><Star />Chicago food inspections</div>
+            <div className="brand"><Mark />Chicago food inspections</div>
             <FreshnessLine state={freshness} />
           </div>
           <Ask />
