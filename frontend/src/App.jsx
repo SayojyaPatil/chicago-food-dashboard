@@ -232,7 +232,7 @@ function oneIn(rate) {
   return Number.isFinite(n) && n > 1 ? `about 1 in ${n}` : pct(rate);
 }
 
-function Record({ kpi, risk }) {
+function Record({ kpi, risk, period }) {
   if (kpi.loading) return <p className="state-msg">Loading the inspection record…</p>;
   if (kpi.error || !kpi.data) return <p className="state-msg error" role="alert">The inspection summary did not load ({kpi.error}).</p>;
   const k = kpi.data;
@@ -241,12 +241,13 @@ function Record({ kpi, risk }) {
   return (
     <>
       <p className="record-sentence">
-        In the last 12 months, city inspectors made {fmt(k.total_inspections)} inspections,
+        {capitalize(period.label)}, city inspectors made {fmt(k.total_inspections)} inspections,
         and <span className="fail">{oneIn(k.fail_rate)} failed</span>.
       </p>
       <p className="record-sub">
         {pct(k.overall_pass_rate)} passed, {pct(k.conditions_rate)} passed with conditions (problems found
-        and fixed during the visit), and {pct(k.fail_rate)} failed. The year before, {pct(k.prior_fail_rate)} failed.
+        and fixed during the visit), and {pct(k.fail_rate)} failed.
+        {k.prior_fail_rate != null ? ` The year before, ${pct(k.prior_fail_rate)} failed.` : ""}
         {high && low ? ` Places with the most complex food handling failed ${pct(high.fail_rate_pct)} of the time, against ${pct(low.fail_rate_pct)} for the simplest.` : ""}
       </p>
     </>
@@ -258,45 +259,71 @@ function ChartTip({ active, payload, label, render }) {
   return <div className="chart-tooltip">{render(payload[0].payload, label)}</div>;
 }
 
-function Chart({ title, sub, state, wide, children }) {
+function Chart({ title, sub, state, children }) {
   return (
-    <section className={`chart${wide ? " wide" : ""}`}>
-      <h2>{state.data?.length ? title(state.data) : " "}</h2>
+    <div className="chart">
+      <h3>{state.data?.length ? title(state.data) : " "}</h3>
       {sub && <p className="chart-sub">{sub}</p>}
       {state.loading && <p className="state-msg">Loading…</p>}
       {state.error && <p className="state-msg error">This chart did not load ({state.error}).</p>}
       {state.data && (state.data.length ? children(state.data) : <p className="state-msg">No inspections in this period.</p>)}
-    </section>
+    </div>
   );
 }
 
 const axis = { fill: SOFT, fontSize: 13 };
+
+// One-line category labels. Recharts wraps long labels and then hides
+// neighbouring ticks to make room; this keeps every label, truncated.
+function CategoryTick({ x, y, payload, max = 40 }) {
+  const text = String(payload.value);
+  const shown = text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fill={INK} fontSize={13}>
+      <title>{text}</title>{shown}
+    </text>
+  );
+}
+
+// Describe the period the data actually covers, not an assumed 12 months.
+function coverage(freshness) {
+  const f = freshness?.data;
+  if (!f?.earliest_inspection_date || !f?.latest_inspection_date) return { full: true, label: "in the last 12 months" };
+  const latest = new Date(`${f.latest_inspection_date}T12:00:00`);
+  const earliest = new Date(`${f.earliest_inspection_date}T12:00:00`);
+  const yearAgo = new Date(latest); yearAgo.setFullYear(latest.getFullYear() - 1);
+  if (earliest <= yearAgo) return { full: true, label: "in the last 12 months" };
+  const since = earliest.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  return { full: false, label: `since ${since}` };
+}
+
+const capitalize = t => t.charAt(0).toUpperCase() + t.slice(1);
 
 function monthLabel(m) {
   const d = new Date(`${m}-15T12:00:00`);
   return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
 }
 
-function Trend({ kpi }) {
+function Trend({ kpi, period }) {
   const state = useFetch("/metrics/pass-fail-trend");
   const k = kpi.data;
   const title = () => {
-    if (!k?.fail_rate || !k?.prior_fail_rate) return "Is it getting better or worse?";
+    if (k?.fail_rate == null) return "Is it getting better or worse?";
+    if (k.prior_fail_rate == null) return `Fail rate ${period.label}: ${pct(k.fail_rate)}`;
     const diff = Number(k.fail_rate) - Number(k.prior_fail_rate);
     if (Math.abs(diff) < 0.5) return `Failures held steady: ${pct(k.fail_rate)} this year, ${pct(k.prior_fail_rate)} the year before`;
     return `Failures went ${diff < 0 ? "down" : "up"}: ${pct(k.fail_rate)} this year, ${pct(k.prior_fail_rate)} the year before`;
   };
   return (
-    <Chart wide state={state} title={title}
-      sub="Share of inspections that failed, month by month, over two years. The latest month may be incomplete.">
+    <Chart state={state} title={title}
+      sub={`Share of inspections that failed, month by month${period.full ? ", over up to two years" : ""}. The dashed line is the average ${period.label}. The latest month may be incomplete.`}>
       {data => (
-        <ResponsiveContainer width="100%" height={280}>
+        <ResponsiveContainer width="100%" height={250}>
           <LineChart data={data} margin={{ top: 12, right: 16, left: -6, bottom: 0 }}>
             <CartesianGrid stroke={GRID} vertical={false} />
             <XAxis dataKey="month" tick={axis} tickLine={false} axisLine={{ stroke: PALE }} minTickGap={36} tickFormatter={monthLabel} />
             <YAxis tick={axis} tickLine={false} axisLine={false} width={48} unit="%" domain={[0, "auto"]} />
-            {k?.fail_rate && <ReferenceLine y={Number(k.fail_rate)} stroke={SOFT} strokeDasharray="4 4"
-              label={{ value: `12-month average ${pct(k.fail_rate)}`, position: "insideTopLeft", fill: SOFT, fontSize: 12 }} />}
+            {k?.fail_rate && <ReferenceLine y={Number(k.fail_rate)} stroke={SOFT} strokeDasharray="4 4" />}
             <Tooltip content={<ChartTip render={r => (
               <><b>{monthLabel(r.month)}</b><div>{pct(r.fail_rate_pct)} failed</div><div>{fmt(r.fail)} of {fmt(r.inspections)} inspections</div></>
             )} />} />
@@ -309,22 +336,37 @@ function Trend({ kpi }) {
   );
 }
 
-function Violations() {
+function Violations({ period }) {
   const state = useFetch("/metrics/top-violations");
   const narrow = typeof window !== "undefined" && window.innerWidth < 520;
   return (
-    <Chart wide state={state}
+    <Chart state={state}
       title={d => `Most common problem: ${sentenceCase(d[0].title).toLowerCase()}, found in ${pct(d[0].share_pct)} of inspections`}
-      sub="Share of inspections in the last 12 months that cited each problem. One inspection can cite several, so the bars add up to more than 100%.">
+      sub={`Share of inspections ${period.label} that cited each problem. One inspection can cite several, so the bars add up to more than 100%.`}>
       {data => {
         const rows = data.map(r => ({ ...r, label: `${r.violation_number}. ${sentenceCase(r.title)}` }));
+        if (narrow) {
+          const top = Math.max(...rows.map(r => Number(r.share_pct)));
+          return (
+            <ul className="stacked-bars">
+              {rows.map(r => (
+                <li key={r.violation_number}>
+                  <span className="stacked-label">{r.label}</span>
+                  <span className="stacked-row">
+                    <span className="stacked-bar" style={{ width: `${(Number(r.share_pct) / top) * 82}%` }} />
+                    <span className="stacked-value">{pct(r.share_pct)}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
         return (
           <ResponsiveContainer width="100%" height={rows.length * 38 + 10}>
             <BarChart data={rows} layout="vertical" margin={{ top: 0, right: 56, left: 0, bottom: 0 }}>
               <XAxis type="number" hide domain={[0, "dataMax"]} />
-              <YAxis type="category" dataKey="label" width={narrow ? 150 : 430} tickLine={false} axisLine={false}
-                tick={{ fill: INK, fontSize: 13 }}
-                tickFormatter={l => { const max = narrow ? 22 : 62; return l.length > max ? `${l.slice(0, max - 1)}…` : l; }} />
+              <YAxis type="category" dataKey="label" width={narrow ? 160 : 400} interval={0} tickLine={false} axisLine={false}
+                tick={<CategoryTick max={narrow ? 22 : 56} />} />
               <Tooltip cursor={{ fill: "#F2F8FC" }} content={<ChartTip render={r => (
                 <><b>{r.label}</b><div>{fmt(r.inspections_cited)} inspections ({pct(r.share_pct)})</div></>
               )} />} />
@@ -344,8 +386,8 @@ function RateBars({ data, labelKey, city, height, labelWidth, max }) {
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} layout="vertical" margin={{ top: 18, right: 52, left: 0, bottom: 0 }}>
         <XAxis type="number" hide domain={[0, dataMax => Math.max(max || dataMax, dataMax, Number(city || 0)) * 1.1]} />
-        <YAxis type="category" dataKey={labelKey} width={labelWidth} tickLine={false} axisLine={false}
-          tick={{ fill: INK, fontSize: 13 }} tickFormatter={l => (l.length > 22 ? `${l.slice(0, 21)}…` : l)} />
+        <YAxis type="category" dataKey={labelKey} width={labelWidth} interval={0} tickLine={false} axisLine={false}
+          tick={<CategoryTick max={labelWidth > 100 ? 22 : 8} />} />
         <Tooltip cursor={{ fill: "#F2F8FC" }} content={<ChartTip render={r => (
           <><b>{r[labelKey]}</b><div>{pct(r.fail_rate_pct)} failed</div><div>{fmt(r.failed)} of {fmt(r.total_inspections)} inspections</div></>
         )} />} />
@@ -360,13 +402,13 @@ function RateBars({ data, labelKey, city, height, labelWidth, max }) {
   );
 }
 
-function Zips({ kpi }) {
+function Zips({ kpi, period }) {
   const state = useFetch("/metrics/zip-fail-rates");
   const city = kpi.data?.fail_rate;
   return (
     <Chart state={state}
       title={d => `ZIP codes range from ${pct(d[d.length - 1].fail_rate_pct)} to ${pct(d[0].fail_rate_pct)} failed`}
-      sub="Highest and lowest fail rates among ZIP codes with at least 100 inspections in the last 12 months. Red bars are above the citywide rate.">
+      sub={`Highest and lowest fail rates among ZIP codes with at least 100 inspections ${period.label}. Red bars are above the citywide rate.`}>
       {data => {
         const top = data.slice(0, 6);
         const bottom = data.length > 10 ? data.slice(-4) : data.slice(6);
@@ -388,17 +430,17 @@ function Zips({ kpi }) {
   );
 }
 
-function Facilities({ kpi }) {
+function Facilities({ kpi, period }) {
   const state = useFetch("/metrics/top-facility-types");
   const city = kpi.data?.fail_rate;
   return (
     <Chart state={state}
       title={d => { const worst = [...d].sort((a, b) => b.fail_rate_pct - a.fail_rate_pct)[0]; return `Highest fail rate by kind of business: ${worst.facility_type}, ${pct(worst.fail_rate_pct)}`; }}
-      sub="Fail rate for the ten most inspected kinds of business, last 12 months. Red bars are above the citywide rate.">
+      sub={`Fail rate for the ten most inspected kinds of business ${period.label}. Red bars are above the citywide rate.`}>
       {data => {
         const rows = [...data].sort((a, b) => b.fail_rate_pct - a.fail_rate_pct);
         return <RateBars data={rows} labelKey="facility_type" city={city} height={rows.length * 30 + 30}
-          labelWidth={typeof window !== "undefined" && window.innerWidth < 520 ? 128 : 170} />;
+          labelWidth={typeof window !== "undefined" && window.innerWidth < 520 ? 140 : 180} />;
       }}
     </Chart>
   );
@@ -421,6 +463,7 @@ export default function App() {
   const kpi = useFetch("/metrics/kpi-summary");
   const risk = useFetch("/metrics/risk-distribution");
   const freshness = useFetch("/metrics/freshness");
+  const period = coverage(freshness);
 
   return (
     <>
@@ -435,13 +478,26 @@ export default function App() {
       </header>
 
       <main className="wrap">
-        <section className="record"><Record kpi={kpi} risk={risk} /></section>
-        <div className="charts">
-          <Trend kpi={kpi} />
-          <Violations />
-          <Zips kpi={kpi} />
-          <Facilities kpi={kpi} />
-        </div>
+        <section className="block" aria-labelledby="overall">
+          <h2 className="block-title" id="overall">Overall</h2>
+          <div className="overview">
+            <div className="record"><Record kpi={kpi} risk={risk} period={period} /></div>
+            <Trend kpi={kpi} period={period} />
+          </div>
+        </section>
+
+        <section className="block" aria-labelledby="problems">
+          <h2 className="block-title" id="problems">What goes wrong</h2>
+          <Violations period={period} />
+        </section>
+
+        <section className="block" aria-labelledby="where">
+          <h2 className="block-title" id="where">Where, and at what kind of place</h2>
+          <div className="pair">
+            <Zips kpi={kpi} period={period} />
+            <Facilities kpi={kpi} period={period} />
+          </div>
+        </section>
       </main>
 
       <footer className="band band-bottom">
